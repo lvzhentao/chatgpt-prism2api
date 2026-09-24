@@ -1,0 +1,202 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: prism-2api-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${PRISM_DB_USER:-prism}"
+      POSTGRES_PASSWORD: "${PRISM_DB_PASSWORD:-prism}"
+      POSTGRES_DB: "${PRISM_DB_NAME:-prism}"
+    volumes:
+      - ./data-pg:/var/lib/postgresql/data
+    # 不映射到公网；容器间走 compose 网络
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PRISM_DB_USER:-prism} -d ${PRISM_DB_NAME:-prism}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  prism-2api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # 镜像名由变量决定：现场构建（scripts/deploy.sh）与 CI 构建后拉取（scripts/deploy-pull.sh）共用同一引用。
+    # 回滚：把 .env 里的 PRISM_APP_TAG/PRISM_LOGIN_TAG 换成 app-<sha>/login-<sha> 再 pull。
+    image: ${PRISM_IMAGE_REPO:-your-dockerhub-user/prism-2api}:${PRISM_APP_TAG:-app-latest}
+    container_name: prism-2api
+    restart: unless-stopped
+    ports:
+      - "${PRISM_HOST_PORT:-8879}:8080"   # 外部端口 → 容器 8080（API + /admin/）
+    env_file:
+      - path: .env                          # 密钥（DB 口令 / API Key / 加密键），600 权限
+        required: false
+    environment:
+      WEB2API_ADMIN_STATIC: /app/web
+      WEB2API_ALLOW_REMOTE_ADMIN: "true"
+      TZ: Asia/Shanghai
+      # off=停保活重登循环（auth 面 CF 风控时的雪崩止血闸，见 keepalive_boot.go）
+      WEB2API_KEEPALIVE: "${WEB2API_KEEPALIVE:-}"
+      # 上游站点地址（Prism）；不设置会退回脚手架占位符 api.example.com 导致全部请求失败
+      VENDOR_API_BASE_URL: "${VENDOR_API_BASE_URL:-https://prism.openai.com}"
+      # Anthropic 入口的思考档位上限：thinking.budget_tokens/output_config.effort 会被压到这一档
+      # （默认 low，防止 max 档 40-181s 纯 thinking）。OpenAI 入口的 reasoning_effort 不受它限制。
+      WEB2API_MAX_EFFORT: "${WEB2API_MAX_EFFORT:-high}"
+      # 没指定模型时的兜底（/v1/messages 不带 model、以及无法识别的模型名都会落到它）。
+      # 与 internal/adapter/prism/models.go 的 DefaultModel 保持一致：上游 gpt-6-astra 恒 400，用 sol。
+      WEB2API_DEFAULT_MODEL: "${WEB2API_DEFAULT_MODEL:-gpt-5.6-sol}"
+      # 非空时把整段 input（上游收到的提示词）打进容器日志，用于核对送了哪些提示词
+      PRISM_LOG_INPUT: "${PRISM_LOG_INPUT:-}"
+      # 注入给上游的系统指令：留空用内置默认（参考 Codex 风格），off 关闭，也可直接给文本或指向文件
+      PRISM_SYSTEM_PROMPT: "${PRISM_SYSTEM_PROMPT:-}"
+      PRISM_SYSTEM_PROMPT_FILE: "${PRISM_SYSTEM_PROMPT_FILE:-}"
+      # 本站 API 鉴权 Key（设置后调用 /v1/chat/completions 需 Authorization: Bearer <key>；管理端同 key）
+      # WEB2API_API_KEY: your-admin-key
+      # 多账号上游 API Key（逗号分隔，每个 key 一个账号）
+      # WEB2API_API_KEYS: sk-aaa,sk-bbb
+      # 单个启动账号
+      # VENDOR_API_KEY: sk-xxx
+      DATABASE_URL: "postgres://${PRISM_DB_USER:-prism}:${PRISM_DB_PASSWORD:-prism}@postgres:5432/${PRISM_DB_NAME:-prism}?sslmode=disable"
+      # 登录侧车：配了 URL 就走远端 HTTP（管理端「选中 → 登录」在容器里跑真浏览器）
+      PRISM_LOGIN_SIDECAR_URL: "${PRISM_LOGIN_SIDECAR_URL:-http://prism-login:8099}"
+      PRISM_LOGIN_CONCURRENCY: "${PRISM_LOGIN_CONCURRENCY:-2}"
+      # WEB2API_TLS_CERT: /certs/fullchain.pem
+      # WEB2API_TLS_KEY: /certs/privkey.pem
+      # WEB2API_PROXY: http://127.0.0.1:7890
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./data:/data                # 仅一次性迁入旧 JSON；之后状态只在 PostgreSQL
+      - ./data-login-state:/data/login-state   # 登录侧车与网关共享（设备指纹）
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 登录侧车：真浏览器（chromium，xvfb 虚拟显示）登录 ChatGPT 账号换取 Prism 凭据。
+  # 浏览器很重：默认并发 2，内存约 500MB/实例；只在「选中账号 → 登录」时被调用。
+  prism-login:
+    build:
+      context: .
+      dockerfile: Dockerfile.login
+    image: ${PRISM_IMAGE_REPO:-your-dockerhub-user/prism-2api}:${PRISM_LOGIN_TAG:-login-latest}
+    container_name: prism-login
+    restart: unless-stopped
+    # 浏览器+sentinel 铸造都是 fd 大户：默认软限 1024 一次 chromium 就见底
+    # （线上实测 Errno 24 Too many open files 打爆 mint/材料产线）。
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 262144
+    # 内存护栏：2026-09-22 实测 anon 10.6G / current 12.5G / peak 14.0G（宿主 64G 无 swap）。
+    # 16g 设在峰值之上，只做「单容器跑飞不拖垮同机其他 35 个容器」的爆炸半径收敛，
+    # 不改变现有行为；真要降占用得调 .env 的 PRISM_LOGIN_CONCURRENCY / MATERIAL_WORKERS。
+    mem_limit: 16g
+    memswap_limit: 16g    # 无 swap，同值即禁止换页
+    environment:
+      # .env 的代理池等配置透传（turn worker 出口轮转）
+      PRISM_TURN_PROXIES: "${PRISM_TURN_PROXIES:-}"
+      PRISM_TURN_WORKERS: "${PRISM_TURN_WORKERS:-}"
+      TZ: Asia/Shanghai
+      PRISM_LOGIN_STATE_DIR: /data/login-state
+      PRISM_LOGIN_BACKEND: "${PRISM_LOGIN_BACKEND:-chromium}"
+      PRISM_LOGIN_MAX_CONCURRENT: "${PRISM_LOGIN_CONCURRENCY:-2}"
+      # 登录出口代理（每账号可再单独覆盖；含 {sid} 时按账号渲染粘性会话）
+      # 产线扩容（与网关 sentinel.go 同名同源；曾经没传——.env 设 6 而侧车跑默认 4）
+      PRISM_MATERIAL_WORKERS: "${PRISM_MATERIAL_WORKERS:-4}"
+      PRISM_SENTINEL_CONCURRENCY: "${PRISM_SENTINEL_CONCURRENCY:-2}"
+      PRISM_LOGIN_PROXY: "${PRISM_LOGIN_PROXY:-}"
+    volumes:
+      - ./data-login-state:/data/login-state
+    expose:
+      - "8099"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8099/healthz',timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 免账号自测模式：内置模拟后端（无需任何真实账号即可体验全部功能）
+  # 用法：docker compose --profile mock up -d
+  prism-login2:
+    build:
+      context: .
+      dockerfile: Dockerfile.login
+    image: ${PRISM_IMAGE_REPO:-your-dockerhub-user/prism-2api}:${PRISM_LOGIN_TAG:-login-latest}
+    container_name: prism-login2
+    restart: unless-stopped
+    # 浏览器+sentinel 铸造都是 fd 大户：默认软限 1024 一次 chromium 就见底
+    # （线上实测 Errno 24 Too many open files 打爆 mint/材料产线）。
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 262144
+    # 内存护栏：2026-09-22 实测 anon 11.2G / current 13.1G / peak 13.6G（宿主 64G 无 swap）。
+    # 16g 设在峰值之上，只做「单容器跑飞不拖垮同机其他 35 个容器」的爆炸半径收敛，
+    # 不改变现有行为；真要降占用得调 .env 的 PRISM_LOGIN_CONCURRENCY / MATERIAL_WORKERS。
+    mem_limit: 16g
+    memswap_limit: 16g    # 无 swap，同值即禁止换页
+    environment:
+      # .env 的代理池等配置透传（turn worker 出口轮转）
+      PRISM_TURN_PROXIES: "${PRISM_TURN_PROXIES:-}"
+      PRISM_TURN_WORKERS: "${PRISM_TURN_WORKERS:-}"
+      TZ: Asia/Shanghai
+      PRISM_LOGIN_STATE_DIR: /data/login-state
+      PRISM_LOGIN_BACKEND: "${PRISM_LOGIN_BACKEND:-chromium}"
+      PRISM_LOGIN_MAX_CONCURRENT: "${PRISM_LOGIN_CONCURRENCY:-2}"
+      # 登录出口代理（每账号可再单独覆盖；含 {sid} 时按账号渲染粘性会话）
+      # 产线扩容（与网关 sentinel.go 同名同源；曾经没传——.env 设 6 而侧车跑默认 4）
+      PRISM_MATERIAL_WORKERS: "${PRISM_MATERIAL_WORKERS:-4}"
+      PRISM_SENTINEL_CONCURRENCY: "${PRISM_SENTINEL_CONCURRENCY:-2}"
+      PRISM_LOGIN_PROXY: "${PRISM_LOGIN_PROXY:-}"
+    volumes:
+      - ./data-login-state:/data/login-state
+    expose:
+      - "8099"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8099/healthz',timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 免账号自测模式：内置模拟后端（无需任何真实账号即可体验全部功能）
+  # 用法：docker compose --profile mock up -d
+  mock:
+    profiles: ["mock"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: prism-2api:mock
+    container_name: prism-2api-mock
+    restart: unless-stopped
+    command: ["--mock", "--listen", "0.0.0.0:8080"]
+    ports:
+      - "18080:8080"               # mock 模式端口（避免与主实例冲突）
+    volumes:
+      - ./data-mock:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

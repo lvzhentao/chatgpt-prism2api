@@ -1,0 +1,18 @@
+.env
+data/
+data-pg/
+web/node_modules/
+web/dist/
+.DS_Store
+tmp/
+/server
+/web2api
+.idea/
+*.iml
+# 本地工具缓存
+.codegraph/
+.cursor/
+data-login-state/
+scripts/__pycache__/
+*.pyc
+har/

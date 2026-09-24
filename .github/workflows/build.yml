@@ -1,0 +1,76 @@
+name: build-images
+
+# 镜像路线（ghcr.io）：构建两个镜像（网关 + 登录侧车）推到 GitHub 容器仓库。
+# push master 或手动触发即构建，用工作流内置 GITHUB_TOKEN，零配置。
+# 部署到自己的服务器可参考 scripts/deploy-pull.sh（TAG=<short-sha> 手动拉取上线）。
+
+on:
+  push:
+    branches: [master]
+    paths-ignore: ['**.md', 'docs/**', 'har/**', 'cookies/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-images-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_REPO: ghcr.io/${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: app
+            dockerfile: Dockerfile
+            tag: app
+          - name: login
+            dockerfile: Dockerfile.login
+            tag: login
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 解析 tag
+        id: meta
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 登录 ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 构建并推送 ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.IMAGE_REPO }}:${{ matrix.tag }}-${{ steps.meta.outputs.short }}
+            ${{ env.IMAGE_REPO }}:${{ matrix.tag }}-latest
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,scope=${{ matrix.name }},mode=max
+
+      - name: 摘要
+        env:
+          TAG_PREFIX: ${{ matrix.tag }}
+          SHORT: ${{ steps.meta.outputs.short }}
+        run: |
+          {
+            echo "### ${{ matrix.name }} 镜像已推送"
+            echo ""
+            echo "\`${IMAGE_REPO}:${TAG_PREFIX}-${SHORT}\` （同时更新 \`${TAG_PREFIX}-latest\`）"
+            echo ""
+            echo "回滚：\`TAG=<旧sha> workflow_dispatch\` 触发，或见 scripts/deploy-pull.sh 头部说明。"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,213 @@
+@import "tailwindcss";
+
+@theme {
+  --color-parchment: #f7f7f4;
+  --color-bone: #f2f1ed;
+  --color-linen: #e6e5e0;
+  --color-stone: #cdcdc9;
+  --color-mist: #a1a19f;
+  --color-driftwood: #84847e;
+  --color-ash: #7a7974;
+  --color-ink: #26251e;
+  --color-ember: #f54e00;
+  --color-amber: #c08532;
+  --color-forest: #34785c;
+  --color-verdant: #1f8a65;
+  --color-crimson: #cf2d56;
+
+  --color-background: #f7f7f4;
+  --color-foreground: #26251e;
+  --color-card: #f2f1ed;
+  --color-card-foreground: #26251e;
+  --color-popover: #f2f1ed;
+  --color-popover-foreground: #26251e;
+  --color-primary: #26251e;
+  --color-primary-foreground: #f7f7f4;
+  --color-secondary: #e6e5e0;
+  --color-secondary-foreground: #26251e;
+  --color-muted: #e6e5e0;
+  --color-muted-foreground: #7a7974;
+  --color-accent: #e6e5e0;
+  --color-accent-foreground: #26251e;
+  --color-destructive: #cf2d56;
+  --color-destructive-foreground: #f7f7f4;
+  --color-border: #cdcdc9;
+  --color-input: #cdcdc9;
+  --color-ring: #26251e;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-serif: "EB Garamond", ui-serif, Georgia, serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --radius-sm: 1.5px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius: 4px;
+
+  --shadow-paper: 0 28px 70px rgba(0, 0, 0, 0.14), 0 14px 32px rgba(0, 0, 0, 0.1);
+  --shadow-flyout: 0 0 1rem #00000008, 0 0 0.5rem #00000005;
+}
+
+.dark {
+  --color-parchment: #161511;
+  --color-bone: #1c1b16;
+  --color-linen: #26251e;
+  --color-stone: #3d3c36;
+  --color-mist: #8a8983;
+  --color-driftwood: #a8a79f;
+  --color-ash: #b5b4ac;
+  --color-ink: #f2f1ed;
+  --color-ember: #ff6a1a;
+  --color-amber: #d4a04a;
+  --color-forest: #4a9d7a;
+  --color-verdant: #3aa87d;
+  --color-crimson: #e85a7a;
+
+  --color-background: #161511;
+  --color-foreground: #f2f1ed;
+  --color-card: #1c1b16;
+  --color-card-foreground: #f2f1ed;
+  --color-popover: #1c1b16;
+  --color-popover-foreground: #f2f1ed;
+  --color-primary: #f2f1ed;
+  --color-primary-foreground: #161511;
+  --color-secondary: #26251e;
+  --color-secondary-foreground: #f2f1ed;
+  --color-muted: #26251e;
+  --color-muted-foreground: #b5b4ac;
+  --color-accent: #26251e;
+  --color-accent-foreground: #f2f1ed;
+  --color-destructive: #e85a7a;
+  --color-destructive-foreground: #161511;
+  --color-border: #3d3c36;
+  --color-input: #3d3c36;
+  --color-ring: #f2f1ed;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    @apply font-sans text-foreground bg-background antialiased;
+  }
+  body {
+    @apply min-h-dvh bg-background text-foreground;
+  }
+  ::selection {
+    background: #8bc4f8;
+    color: #26251e;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes stagger-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.page-enter {
+  animation: page-enter 280ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.stagger-in {
+  animation: stagger-in 320ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation-delay: calc(var(--stagger, 0) * 45ms);
+}
+
+.skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-linen);
+}
+.skeleton-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.42), transparent);
+  animation: shimmer 1.15s ease-in-out infinite;
+}
+.dark .skeleton-shimmer::after {
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.06), transparent);
+}
+
+.card-press {
+  transition:
+    border-color 160ms cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 160ms cubic-bezier(0.4, 0, 0.2, 1),
+    background-color 160ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.card-press:hover {
+  border-color: color-mix(in srgb, var(--color-ink) 42%, var(--color-border));
+  background: var(--color-parchment);
+  box-shadow:
+    inset 0 1px 0 rgb(38 37 30 / 0.08),
+    inset 0 10px 20px rgb(38 37 30 / 0.06);
+}
+.card-press:active {
+  box-shadow:
+    inset 0 2px 2px rgb(38 37 30 / 0.08),
+    inset 0 12px 22px rgb(38 37 30 / 0.1);
+}
+.dark .card-press:hover {
+  box-shadow:
+    inset 0 1px 0 rgb(0 0 0 / 0.35),
+    inset 0 10px 20px rgb(0 0 0 / 0.28);
+}
+.dark .card-press:active {
+  box-shadow:
+    inset 0 2px 2px rgb(0 0 0 / 0.4),
+    inset 0 12px 22px rgb(0 0 0 / 0.36);
+}
+
+.dark ::selection {
+  background: #3a5a7a;
+  color: #f2f1ed;
+}
+
+@utility heading-display {
+  font-weight: 400;
+  letter-spacing: -0.03em;
+}
+
+@utility heading-tight {
+  font-weight: 400;
+  letter-spacing: -0.012em;
+}

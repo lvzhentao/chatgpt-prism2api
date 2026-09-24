@@ -1,0 +1,19 @@
+# 构建上下文忽略
+.git
+.gitignore
+*.md
+data/
+data-mock/
+data-pg/
+data-login-state/
+tmp/
+*.log
+web/node_modules
+web/dist
+.DS_Store
+.codegraph/
+
+har/
+cookies/
+docs/
+PLAN.md
